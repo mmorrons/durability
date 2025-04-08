@@ -1,4 +1,4 @@
-# streamlit_app.py (3-Column Layout, Selection-to-Manual Transfer)
+# streamlit_app.py (Modificato con Pulsante Applica)
 
 import streamlit as st
 import pandas as pd
@@ -22,7 +22,7 @@ APP_TITLE = "DUR Split Regression"
 LOG_LEVEL = logging.INFO
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s-%(levelname)s-%(message)s')
 
-# --- Helper Function for Plotting ---
+# --- Helper Function for Plotting (invariata) ---
 def create_plot(df, x_col, y_col, smoothing_method, metadata, segments):
     """Creates the Plotly figure, now without P1 marker"""
     fig = go.Figure()
@@ -71,21 +71,25 @@ def create_plot(df, x_col, y_col, smoothing_method, metadata, segments):
     )
     return fig
 
+
 # --- Streamlit App ---
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
+# <<< MODIFICATO: Istruzioni aggiornate per il pulsante Applica >>>
 st.info("""
 **Instructions:**
-1. Load file(s). 2. Configure plot (Right Panel).
-3. **To add segments:**
-    Type P1(X,Y) and P2(X,Y) coords directly (Right Panel), then click 'Add Manual Segment'.
-4. Segments show on plot and details below. Use Reset buttons as needed.
+1. Load file(s).
+2. Configure Dataset, Smoothing, and Axes (Right Panel).
+3. **Click 'Apply Changes'** to update the plot with the new configuration.
+4. **To add segments:**
+    Type P1(X,Y) and P2(X,Y) coords directly (Middle Panel), then click 'Add Manual Segment'.
+5. Segments show on plot and details below. Use Reset buttons as needed.
 """)
 
 # --- Session State Initialization ---
 # Data storage
 if 'processed_data' not in st.session_state: st.session_state.processed_data = {}
-# Global Selections
+# Global Selections (quelli che verranno applicati)
 if 'current_selected_key' not in st.session_state: st.session_state.current_selected_key = None
 if 'current_smoothing' not in st.session_state: st.session_state.current_smoothing = "Raw Data"
 if 'current_x_col' not in st.session_state: st.session_state.current_x_col = None
@@ -100,15 +104,37 @@ if 'manual_y2' not in st.session_state: st.session_state.manual_y2 = None
 if 'selection_target' not in st.session_state: st.session_state.selection_target = 'P1' # Target 'P1' or 'P2'
 # Store last event to prevent double processing
 if 'last_select_event_data' not in st.session_state: st.session_state.last_select_event_data = None
+# <<< NUOVO: Stato per gestire l'aggiornamento con il pulsante >>>
+if 'last_figure' not in st.session_state: st.session_state.last_figure = None # Memorizza l'ultimo grafico *applicato*
+if 'last_applied_config' not in st.session_state: st.session_state.last_applied_config = {} # Memorizza la config dell'ultimo grafico *applicato*
+if 'files_processed_flag' not in st.session_state: st.session_state.files_processed_flag = False
+
 
 # --- File Upload & Processing ---
 uploaded_files = st.file_uploader("Upload Data File(s)", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="file_uploader_main")
-# (File processing logic remains the same as previous version)
-if uploaded_files and not st.session_state.get('files_processed_flag', False):
+
+# <<< MODIFICATO: Resetta lo stato del grafico quando si caricano nuovi file >>>
+files_were_uploaded = bool(uploaded_files)
+files_are_new = files_were_uploaded and not st.session_state.get('files_processed_flag', False)
+
+if files_are_new:
     new_files_count = 0; error_files = []
     with st.spinner("Processing..."):
         st.session_state.processed_data = {} # Clear old data on new upload
-        st.session_state.current_selected_key = None
+        st.session_state.current_selected_key = None # Resetta la selezione corrente
+        # --- Reset state related to plotting and config confirmation ---
+        st.session_state.last_figure = None
+        st.session_state.last_applied_config = {}
+        st.session_state.current_x_col = None
+        st.session_state.current_y_col = None
+        st.session_state.current_smoothing = "Raw Data"
+        st.session_state.segments = []
+        st.session_state.manual_x1, st.session_state.manual_y1 = None, None
+        st.session_state.manual_x2, st.session_state.manual_y2 = None, None
+        st.session_state.selection_target = 'P1'
+        st.session_state.last_select_event_data = None
+        # --- End Reset ---
+
         for uploaded_file in uploaded_files:
             filename = uploaded_file.name; file_content_buffer = io.BytesIO(uploaded_file.getvalue())
             metadata, unique_key = dp.parse_filename(filename)
@@ -125,15 +151,9 @@ if uploaded_files and not st.session_state.get('files_processed_flag', False):
     if new_files_count > 0: st.success(f"Processed {new_files_count} file(s).")
     if error_files: st.error(f"Failed: {', '.join(error_files)}")
     st.session_state.files_processed_flag = True
-    # Reset analysis state on new upload
-    st.session_state.segments = []
-    st.session_state.manual_x1, st.session_state.manual_y1 = None, None
-    st.session_state.manual_x2, st.session_state.manual_y2 = None, None
-    st.session_state.selection_target = 'P1'
-    st.session_state.last_select_event_data = None
-    st.rerun() # Rerun immediately after processing
-elif not uploaded_files and st.session_state.get('files_processed_flag'):
-     st.session_state.files_processed_flag = False
+    st.rerun() # Rerun immediately after processing to reflect changes
+elif not files_were_uploaded and st.session_state.get('files_processed_flag'):
+     st.session_state.files_processed_flag = False # Reset flag if files are removed
 
 # --- Main Area ---
 if not st.session_state.processed_data: st.warning("Upload data file(s).")
@@ -148,42 +168,80 @@ else:
         # Dataset selection
         dataset_options = {k: v['metadata'].get('display_name', k) for k, v in st.session_state.processed_data.items()}
         sorted_keys = sorted(dataset_options, key=dataset_options.get); display_names = [dataset_options[key] for key in sorted_keys]
-        current_display_name = dataset_options.get(st.session_state.current_selected_key, None)
-        try: current_idx = display_names.index(current_display_name) if current_display_name else 0
+        # Leggi la chiave corrente dallo stato
+        current_key_on_load = st.session_state.current_selected_key
+        current_display_name = dataset_options.get(current_key_on_load, None)
+        try: current_idx = display_names.index(current_display_name) if current_display_name and display_names else 0
         except ValueError: current_idx = 0
-        selected_display_name = st.selectbox("Dataset:", options=display_names, key="dataset_selector_display", index=current_idx)
-        new_selected_key = next((key for key, name in dataset_options.items() if name == selected_display_name), None)
-        if new_selected_key != st.session_state.current_selected_key:
-            st.session_state.current_selected_key = new_selected_key
-            st.session_state.segments = [] # Reset segments on dataset change
+
+        # Usa un widget selectbox per selezionare il NOME visualizzato
+        selected_display_name = st.selectbox(
+            "Dataset:", options=display_names, key="dataset_selector_display", index=current_idx,
+            help="Changing the dataset will reset segments and require applying changes again."
+            )
+        # Trova la CHIAVE corrispondente al nome selezionato
+        selected_key = next((key for key, name in dataset_options.items() if name == selected_display_name), None)
+
+        # <<< MODIFICATO: Logica di cambio dataset >>>
+        # Controlla se la chiave selezionata è cambiata rispetto a quella memorizzata
+        if selected_key != st.session_state.current_selected_key:
+            logging.info(f"Dataset selection changed to: {selected_key}. Resetting states.")
+            st.session_state.current_selected_key = selected_key
+            # --- Reset states on dataset change ---
+            st.session_state.segments = []
             st.session_state.manual_x1, st.session_state.manual_y1 = None, None
             st.session_state.manual_x2, st.session_state.manual_y2 = None, None
             st.session_state.selection_target = 'P1'
             st.session_state.last_select_event_data = None
-            logging.info(f"Dataset changed to: {st.session_state.current_selected_key}. Reset state."); st.rerun()
+            st.session_state.last_figure = None # Forza rigenerazione al prossimo Apply
+            st.session_state.last_applied_config = {} # Resetta la config applicata
+            st.session_state.current_x_col = None # Resetta anche gli assi e smoothing
+            st.session_state.current_y_col = None
+            st.session_state.current_smoothing = "Raw Data"
+            # --- End Reset ---
+            st.rerun() # Rerun per applicare il reset
 
-        selected_key = st.session_state.current_selected_key
-        if not selected_key or selected_key not in st.session_state.processed_data: st.error("Dataset error."); st.stop()
+        # Assicurati che la chiave sia valida dopo il potenziale cambio
+        if not selected_key or selected_key not in st.session_state.processed_data: st.error("Dataset error or not selected."); st.stop()
+
+        # Ottieni i dati per la chiave CORRENTE (già aggiornata se necessario)
         current_metadata = st.session_state.processed_data[selected_key]['metadata']; df_prepared = st.session_state.processed_data[selected_key]['prepared_df']
 
-        # Smoothing selection
+        # Smoothing selection (aggiorna lo stato direttamente)
         smoothing_options = ["Raw Data", "10 Breaths MA", "15 Breaths MA", "20 Breaths MA", "30 Breaths MA", "5 Sec MA", "10 Sec MA", "15 Sec MA", "20 Sec MA", "30 Sec MA"]
-        st.session_state.current_smoothing = st.selectbox("Smoothing:", options=smoothing_options, index=smoothing_options.index(st.session_state.current_smoothing) if st.session_state.current_smoothing in smoothing_options else 0, key="smoothing_selector")
+        current_smoothing_idx = smoothing_options.index(st.session_state.current_smoothing) if st.session_state.current_smoothing in smoothing_options else 0
+        st.session_state.current_smoothing = st.selectbox(
+                "Smoothing:", options=smoothing_options,
+                index=current_smoothing_idx,
+                key="smoothing_selector"
+            )
 
-        # Apply smoothing - This happens here, result used by plot and axes selectors
-        df_display = dp.apply_smoothing(df_prepared, st.session_state.current_smoothing, dp.TIME_COL_SECONDS)
-        if df_display is None or df_display.empty: st.error(f"No data after smoothing."); st.stop()
-        numeric_cols = df_display.select_dtypes(include=np.number).columns.tolist()
-        if not numeric_cols: st.error("No numeric columns."); st.stop()
+        # Applicare smoothing TEMPORANEAMENTE per ottenere le colonne disponibili per i selettori degli assi
+        # NOTA: Questo smoothing verrà riapplicato al momento della generazione del plot se si clicca "Applica"
+        try:
+             df_for_columns = dp.apply_smoothing(df_prepared, st.session_state.current_smoothing, dp.TIME_COL_SECONDS)
+             if df_for_columns is None or df_for_columns.empty: raise ValueError("Smoothing returned no data")
+             numeric_cols = df_for_columns.select_dtypes(include=np.number).columns.tolist()
+             if not numeric_cols: raise ValueError("No numeric columns after smoothing")
+        except Exception as e:
+             st.error(f"Error during temporary smoothing for axis selection: {e}")
+             numeric_cols = df_prepared.select_dtypes(include=np.number).columns.tolist() # Fallback to prepared cols
+             if not numeric_cols: st.stop()
 
-        # Axis selection
+        # Axis selection (aggiorna lo stato direttamente)
         current_x = st.session_state.get('current_x_col')
         default_x = current_x if current_x in numeric_cols else (dp.TIME_COL_SECONDS if dp.TIME_COL_SECONDS in numeric_cols else numeric_cols[0])
-        st.session_state.current_x_col = st.selectbox("X-Axis:", numeric_cols, index=numeric_cols.index(default_x) if default_x in numeric_cols else 0, key=f"x_select")
+        try: default_x_idx = numeric_cols.index(default_x)
+        except ValueError: default_x_idx = 0
+        st.session_state.current_x_col = st.selectbox(
+                "X-Axis:", numeric_cols,
+                index=default_x_idx,
+                key=f"x_select"
+            )
 
         current_y = st.session_state.get('current_y_col')
         y_options = [c for c in numeric_cols if c != st.session_state.current_x_col]
-        if not y_options: st.error("Only one numeric column."); st.stop()
+        if not y_options: st.error("Only one numeric column available for Y-axis."); st.stop()
         default_y = None
         if current_y in y_options: default_y = current_y
         else:
@@ -191,13 +249,23 @@ else:
             for yc in y_options:
                 if yc in common_y: default_y = yc; break
             if default_y is None: default_y = y_options[0]
-        st.session_state.current_y_col = st.selectbox("Y-Axis:", y_options, index=y_options.index(default_y) if default_y in y_options else 0, key=f"y_select")
+        try: default_y_idx = y_options.index(default_y)
+        except ValueError: default_y_idx = 0
+        st.session_state.current_y_col = st.selectbox(
+            "Y-Axis:", y_options,
+            index=default_y_idx,
+            key=f"y_select"
+            )
+
+        # <<< NUOVO: Pulsante Applica Modifiche >>>
+        st.markdown("---") # Separatore visuale
+        apply_changes_button = st.button("Applica Modifiche", key="apply_config", type="primary", use_container_width=True)
 
 
-    # --- Manual Input Column ---
+    # --- Manual Input Column (invariata) ---
     with manual_col:
         st.subheader("Manual Segment")
-        st.info("Use plot select tool (left) or type coords below.")
+        st.caption("Use plot selection or type coords below.") # Modificato caption leggermente
 
         # Display area for selection target
         st.markdown(f"**Next Plot Selection will update:** `{st.session_state.selection_target}`")
@@ -205,8 +273,8 @@ else:
         # Use session state values for number inputs
         st.session_state.manual_x1 = st.number_input("P1 X:", value=st.session_state.manual_x1, format="%.3f", key="disp_x1_manual")
         st.session_state.manual_y1 = st.number_input("P1 Y:", value=st.session_state.manual_y1, format="%.3f", key="disp_y1_manual")
-        st.session_state.manual_x2 = st.number_input("P2 X:", value=None if st.session_state.selection_target == 'P2' else st.session_state.manual_x2, format="%.3f", key="disp_x2_manual") # Clear P2 if target is P2? Maybe not.
-        st.session_state.manual_y2 = st.number_input("P2 Y:", value=None if st.session_state.selection_target == 'P2' else st.session_state.manual_y2, format="%.3f", key="disp_y2_manual")
+        st.session_state.manual_x2 = st.number_input("P2 X:", value=st.session_state.manual_x2, format="%.3f", key="disp_x2_manual")
+        st.session_state.manual_y2 = st.number_input("P2 Y:", value=st.session_state.manual_y2, format="%.3f", key="disp_y2_manual")
 
         add_manual_button = st.button("Add Manual Segment", key="add_manual_btn", use_container_width=True)
         clear_manual_button = st.button("Clear Manual Inputs", key="clear_manual_btn", use_container_width=True)
@@ -235,7 +303,7 @@ else:
                     slope = dp.calculate_slope(p1, p2); new_segment = {'start': p1, 'end': p2, 'slope': slope}
                     st.session_state.segments.append(new_segment)
                     segment_count = len(st.session_state.segments)
-                    print(f"Manual Seg {segment_count} added. m={slope:.4f}")
+                    logging.info(f"Manual Seg {segment_count} added. m={slope:.4f}")
                     st.success(f"Manual Segment {segment_count} added.")
                     # Optionally clear fields after successful add
                     st.session_state.manual_x1, st.session_state.manual_y1 = None, None
@@ -253,67 +321,107 @@ else:
     # --- Plot Column ---
     with plot_col:
         st.subheader("Plot")
-        x_col_plot = st.session_state.get('current_x_col')
-        y_col_plot = st.session_state.get('current_y_col')
 
-        if x_col_plot and y_col_plot:
-            fig = create_plot(df_display, x_col_plot, y_col_plot, st.session_state.current_smoothing,
-                              current_metadata, st.session_state.segments) # Pass current segments
+        # <<< NUOVO: Logica per decidere se aggiornare il grafico >>>
+        # Raccogli la configurazione CORRENTE dai selettori
+        x_col_selected = st.session_state.get('current_x_col')
+        y_col_selected = st.session_state.get('current_y_col')
+        key_selected = st.session_state.get('current_selected_key')
+        smoothing_selected = st.session_state.get('current_smoothing')
 
-            # Display plot and capture selection event
-            # IMPORTANT: Use a key that doesn't change unnecessarily to preserve state better
-            chart_key = f"main_chart_{selected_key}_{x_col_plot}_{y_col_plot}_{st.session_state.current_smoothing}"
-            event_data = st.plotly_chart(fig, key=chart_key, use_container_width=True, on_select="rerun")
+        current_plot_config = {
+            'key': key_selected,
+            'x': x_col_selected,
+            'y': y_col_selected,
+            'smooth': smoothing_selected
+        }
 
-            # --- Process Selection Event for Click-to-Transfer ---
+        # Controlla se la configurazione attuale è diversa dall'ultima applicata
+        config_has_changed = (current_plot_config != st.session_state.get('last_applied_config'))
+
+        fig_to_display = None
+        regenerate_plot = False
+
+        if apply_changes_button:
+            logging.info("Apply Changes button clicked. Regenerating plot.")
+            regenerate_plot = True
+        elif st.session_state.last_figure is None and key_selected:
+            logging.info("No previous plot found. Triggering initial plot generation on next Apply.")
+            # Non rigenerare ora, ma informa l'utente che deve applicare
+            st.info("Configure plot options and click 'Apply Changes' to generate the initial plot.")
+        elif config_has_changed:
+            logging.info("Configuration changed, but Apply not clicked. Showing previous plot.")
+            st.warning("Configuration changed. Click 'Apply Changes' (Right Panel) to update the plot.")
+            fig_to_display = st.session_state.last_figure # Usa l'ultimo grafico valido
+        else:
+            # Nessun cambiamento e il bottone non è stato premuto, usa l'ultimo grafico valido
+             fig_to_display = st.session_state.last_figure
+
+        # --- Generazione Effettiva del Grafico (se necessario) ---
+        if regenerate_plot:
+            if x_col_selected and y_col_selected and key_selected:
+                 try:
+                     df_prepared_plot = st.session_state.processed_data[key_selected]['prepared_df']
+                     metadata_plot = st.session_state.processed_data[key_selected]['metadata']
+                     segments_plot = st.session_state.segments # Usa i segmenti correnti
+                     # Applica lo smoothing selezionato
+                     df_display = dp.apply_smoothing(df_prepared_plot, smoothing_selected, dp.TIME_COL_SECONDS)
+                     # Crea il grafico
+                     fig = create_plot(df_display, x_col_selected, y_col_selected, smoothing_selected,
+                                       metadata_plot, segments_plot)
+                     # Memorizza il nuovo grafico e la sua configurazione
+                     st.session_state.last_figure = fig
+                     st.session_state.last_applied_config = current_plot_config
+                     fig_to_display = fig
+                     logging.info(f"Plot regenerated for {key_selected}, {x_col_selected} vs {y_col_selected}, {smoothing_selected}")
+                 except Exception as e_plot:
+                     st.error(f"Error generating plot: {e_plot}")
+                     logging.error("Error during plot generation", exc_info=True)
+                     st.session_state.last_figure = go.Figure() # Salva un grafico vuoto in caso di errore
+                     st.session_state.last_applied_config = {}
+                     fig_to_display = st.session_state.last_figure
+            else:
+                 st.error("Cannot generate plot: Missing X/Y selection or dataset.")
+                 fig_to_display = go.Figure()
+                 st.session_state.last_figure = fig_to_display
+                 st.session_state.last_applied_config = {} # Reset config if plot failed
+
+        # --- Visualizzazione del Grafico e Gestione Eventi Selezione ---
+        if fig_to_display is not None:
+            # Usa una chiave stabile per preservare lo stato di zoom/pan tra i rerun
+            # MA deve cambiare se la *struttura dati* sottostante cambia (es. cambio dataset)
+            chart_key = f"main_chart_{key_selected}"
+            event_data = st.plotly_chart(fig_to_display, key=chart_key, use_container_width=True, on_select="rerun")
+
+            # --- Process Selection Event for Click-to-Transfer (invariato) ---
             select_info = event_data.get('select') if event_data else None
             current_event_data = select_info.get('points', []) if select_info else None
-
-            # Check if this is a new event compared to last run
             is_new_event = (current_event_data is not None and current_event_data != st.session_state.last_select_event_data)
 
             if is_new_event:
                 logging.info(f"Selection event: {len(current_event_data)} pts.")
                 if len(current_event_data) >= 1:
-                     # Get coords from first selected point
                      selected_point = current_event_data[0]
                      x_sel, y_sel = selected_point.get('x'), selected_point.get('y')
-
                      if x_sel is not None and y_sel is not None:
-                         print(f"Plot selected: ({x_sel:.2f}, {y_sel:.2f})") # Console log
-
+                         logging.debug(f"Plot selected: ({x_sel:.2f}, {y_sel:.2f})") # Debug log
                          target = st.session_state.selection_target
                          if target == 'P1':
-                             st.session_state.manual_x1 = x_sel
-                             st.session_state.manual_y1 = y_sel
-                             st.session_state.selection_target = 'P2' # Set next target
-                             st.info("P1 coordinates updated from plot selection. Select P2.")
+                             st.session_state.manual_x1 = x_sel; st.session_state.manual_y1 = y_sel
+                             st.session_state.selection_target = 'P2'
                              logging.info("Updated P1 from selection.")
                          elif target == 'P2':
-                             st.session_state.manual_x2 = x_sel
-                             st.session_state.manual_y2 = y_sel
-                             st.session_state.selection_target = 'P1' # Cycle back to P1
-                             st.info("P2 coordinates updated from plot selection. Click 'Add Manual Segment'.")
+                             st.session_state.manual_x2 = x_sel; st.session_state.manual_y2 = y_sel
+                             st.session_state.selection_target = 'P1'
                              logging.info("Updated P2 from selection.")
-
-                         # Store the processed event data to prevent re-processing immediately
                          st.session_state.last_select_event_data = current_event_data
                          st.rerun() # Rerun to update the number_input widgets
-                     else:
-                         logging.warning("Selection event missing coordinate data.")
-                         st.session_state.last_select_event_data = current_event_data # Mark as seen
-                         st.rerun() # Rerun even if data is bad to clear event
-                else:
-                     logging.info("Selection event had no points.")
-                     # Clear last event data if selection was empty
-                     st.session_state.last_select_event_data = None # Use None to indicate no active event processed
-            # If it's not a new event, clear the stored last event so next selection works
+                     else: logging.warning("Selection event missing coordinate data."); st.session_state.last_select_event_data = current_event_data; st.rerun()
+                else: logging.info("Selection event had no points."); st.session_state.last_select_event_data = None
             elif not is_new_event and st.session_state.last_select_event_data is not None:
-                 st.session_state.last_select_event_data = None
-
-
+                 st.session_state.last_select_event_data = None # Clear if event hasn't changed
         else:
-             st.caption("Configure X and Y axes in the control panel.")
+            st.caption("Plot will be displayed here after applying changes.")
 
 
     # --- Display Segment Information (Below Columns) ---
@@ -324,14 +432,25 @@ else:
         data_to_display = []
         for i, seg in enumerate(segments):
             if isinstance(seg, dict) and all(k in seg for k in ['start', 'end', 'slope']):
-                data_to_display.append({
-                    "Seg #": i + 1,
-                    "Start X": f"{seg['start'][0]:.2f}", "Start Y": f"{seg['start'][1]:.2f}",
-                    "End X": f"{seg['end'][0]:.2f}", "End Y": f"{seg['end'][1]:.2f}",
-                    "Slope (m)": f"{seg['slope']:.4f}" })
-        st.dataframe(pd.DataFrame(data_to_display).set_index('Seg #'), use_container_width=True)
+                try: # Aggiunto try-except per robustezza formattazione
+                     data_to_display.append({
+                        "Seg #": i + 1,
+                        "Start X": f"{seg['start'][0]:.2f}", "Start Y": f"{seg['start'][1]:.2f}",
+                        "End X": f"{seg['end'][0]:.2f}", "End Y": f"{seg['end'][1]:.2f}",
+                        "Slope (m)": f"{seg['slope']:.4f}" })
+                except (TypeError, IndexError, KeyError) as e_seg_disp:
+                     logging.warning(f"Error formatting segment {i+1} for display: {e_seg_disp}")
+                     data_to_display.append({"Seg #": i + 1, "Start X": "Error", "Start Y": "Error", "End X": "Error", "End Y": "Error", "Slope (m)": "Error" })
+        try: # Aggiunto try-except per creazione DataFrame
+             df_display_segs = pd.DataFrame(data_to_display)
+             if not df_display_segs.empty:
+                 st.dataframe(df_display_segs.set_index('Seg #'), use_container_width=True)
+             else: st.caption("No valid segments to display.")
+        except Exception as e_df:
+             st.error(f"Error creating segments table: {e_df}")
+             logging.error("Error creating segments DataFrame", exc_info=True)
     else: st.caption("No segments defined yet.")
 
-# --- Footer ---
+# --- Footer (invariato) ---
 st.sidebar.markdown("---"); st.sidebar.markdown(f"*{APP_TITLE}*"); st.sidebar.info(f"📍 Sassari, Sardinia, Italy")
 now_local = datetime.now(); timezone_hint = "CEST"; st.sidebar.caption(f"Generated: {now_local.strftime('%Y-%m-%d %H:%M:%S')} {timezone_hint}")
