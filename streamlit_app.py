@@ -1,4 +1,4 @@
-# streamlit_app.py (Multi-Section Version - Full Updated Code v3)
+# streamlit_app.py (Multi-Section Version - Full Updated Code v4 - Zoom Fix)
 
 import streamlit as st
 import pandas as pd
@@ -18,25 +18,27 @@ except ImportError:
     st.stop()
 
 # --- Configuration ---
-APP_TITLE = "Multi-Analysis Segmenter (v3)"
+APP_TITLE = "Multi-Analysis Segmenter (v4)"
 LOG_LEVEL = logging.INFO
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Helper Function for Plotting (Unchanged) ---
+# --- Helper Function for Plotting (Updated dragmode) ---
 def create_plot(df_display, x_col, y_col, smoothing_method, metadata, segments_list, section_id):
     """Creates the Plotly figure for display, adding section ID to title."""
     fig = go.Figure()
     dataset_name = metadata.get('display_name', f"Data {section_id}")
-    plot_title = f"Section {section_id}: {y_col} vs {x_col} ({smoothing_method})<br>{dataset_name}"
+    plot_title = f"Section {section_id}: {y_col} vs {x_col} ({smoothing_method})<br>{dataset_name}" # Multi-line title
 
-    plot_error = False; err_msg = ""
-    if df_display is None or df_display.empty: plot_error = True; err_msg = "No data to plot."
+    # Basic data validation for plotting
+    plot_error = False
+    err_msg = ""
+    if df_display is None or df_display.empty: plot_error = True; err_msg = "No data to plot (apply smoothing?)."
     elif not x_col or not y_col: plot_error = True; err_msg = "X or Y axis not selected."
-    elif x_col not in df_display.columns: plot_error = True; err_msg = f"X-col '{x_col}' missing."
-    elif y_col not in df_display.columns: plot_error = True; err_msg = f"Y-col '{y_col}' missing."
-    elif df_display[x_col].isnull().all(): plot_error = True; err_msg = f"All X ('{x_col}') data NaN."
-    elif df_display[y_col].isnull().all(): plot_error = True; err_msg = f"All Y ('{y_col}') data NaN."
+    elif x_col not in df_display.columns: plot_error = True; err_msg = f"X-col '{x_col}' not found in smoothed data."
+    elif y_col not in df_display.columns: plot_error = True; err_msg = f"Y-col '{y_col}' not found in smoothed data."
+    elif df_display[x_col].isnull().all(): plot_error = True; err_msg = f"All X ('{x_col}') data is invalid/NaN."
+    elif df_display[y_col].isnull().all(): plot_error = True; err_msg = f"All Y ('{y_col}') data is invalid/NaN."
 
     if plot_error:
         logger.warning(f"Plot Error (Section {section_id}) - {err_msg}")
@@ -44,6 +46,7 @@ def create_plot(df_display, x_col, y_col, smoothing_method, metadata, segments_l
         fig.update_layout(title=f"Section {section_id}: Plot Error", xaxis_title=x_col or "X", yaxis_title=y_col or "Y")
         return fig
 
+    # Add main scatter trace
     try:
         fig.add_trace(go.Scattergl(
             x=df_display[x_col], y=df_display[y_col], mode='markers',
@@ -54,6 +57,7 @@ def create_plot(df_display, x_col, y_col, smoothing_method, metadata, segments_l
          logger.error(f"Error adding scatter trace (Sect {section_id}): {e}", exc_info=True)
          fig.add_annotation(text=f"Plot Error:\n{e}", xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
 
+    # Add Segments
     if isinstance(segments_list, list):
         for i, segment in enumerate(segments_list):
              if isinstance(segment, dict) and all(k in segment for k in ['start', 'end', 'slope']):
@@ -68,8 +72,16 @@ def create_plot(df_display, x_col, y_col, smoothing_method, metadata, segments_l
                  except Exception as e_seg: logger.warning(f"Could not plot segment {i+1} (Sect {section_id}): {e_seg}", exc_info=True)
              else: logger.warning(f"Invalid segment structure index {i} (Sect {section_id})")
 
-    fig.update_layout(title=plot_title, xaxis_title=x_col, yaxis_title=y_col, hovermode='closest', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01), dragmode='select')
+    # <<< CHANGE: Updated dragmode from 'select' to 'zoom' >>>
+    fig.update_layout(
+        title=plot_title,
+        xaxis_title=x_col, yaxis_title=y_col,
+        hovermode='closest',
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+        dragmode='zoom' # Set default drag to zoom
+    )
     return fig
+
 
 # --- Streamlit App Initialization ---
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -80,32 +92,49 @@ st.info("""
 2. In each section:
     a. Upload **one** `.xlsx` or `.csv` file.
     b. Configure Smoothing, X-Axis, and Y-Axis. The plot updates automatically.
-    c. Define segments by clicking points on the plot (fills P1/P2 inputs) or typing coordinates manually.
+    c. **Define segments by clicking points** on the plot (fills P1/P2 inputs) or typing coordinates manually.
     d. Click "Add Segment" within the section.
-    e. Use "Clear Inputs" or "Reset All Segments" within the section as needed.
-    f. Click "Remove Section" to delete an analysis area.
-""")
+    e. Use **drag-to-zoom** on the plot area or axes. Use mode bar for pan/other zoom options.
+    f. Use "Clear Inputs" or "Reset All Segments" within the section as needed.
+    g. Click "Remove Section" to delete an analysis area.
+""") # Added note about zooming
 
 # --- Session State Initialization for Multi-Section ---
 if 'analysis_sections' not in st.session_state:
-    st.session_state.analysis_sections = []
+    st.session_state.analysis_sections = [] # List to hold each section's state
 
 def add_new_section():
+    # Create a more robust unique ID using timestamp and list length
     section_id = f"S{int(time.time()*100)}_{len(st.session_state.analysis_sections)}"
     st.session_state.analysis_sections.append({
-        'id': section_id, 'file_info': None, 'prepared_df': None, 'metadata': {},
+        'id': section_id,
+        'file_info': None, # {'name': ..., 'unique_key': ...}
+        'prepared_df': None,
+        'metadata': {},
         'plot_config': {'smooth': "Raw Data", 'x_col': None, 'y_col': None},
-        'df_display': None, 'segments': [],
+        'df_display': None, # To store the smoothed data for plotting
+        'segments': [],
         'manual_input': {'x1': None, 'y1': None, 'x2': None, 'y2': None},
-        'selection_target': 'P1', 'last_select_event': None, 'plot_fig': None
+        'selection_target': 'P1',
+        'last_select_event': None,
+        'plot_fig': None # Cached plot figure for this section
     })
     logger.info(f"Added new section with ID: {section_id}")
 
 def remove_section(section_id_to_remove):
+    """Removes a section from the list by its ID."""
     initial_len = len(st.session_state.analysis_sections)
-    st.session_state.analysis_sections = [sec for sec in st.session_state.analysis_sections if sec['id'] != section_id_to_remove]
-    if len(st.session_state.analysis_sections) < initial_len: logger.info(f"Removed section {section_id_to_remove}")
-    else: logger.warning(f"Attempted remove section {section_id_to_remove}, but not found.")
+    st.session_state.analysis_sections = [
+        sec for sec in st.session_state.analysis_sections if sec['id'] != section_id_to_remove
+    ]
+    final_len = len(st.session_state.analysis_sections)
+    if final_len < initial_len:
+        logger.info(f"Removed section with ID: {section_id_to_remove}")
+    else:
+        logger.warning(f"Attempted to remove section {section_id_to_remove}, but it was not found.")
+    # Rerun needed to update UI after removal
+    st.rerun()
+
 
 # --- Control Button to Add Sections ---
 st.button("➕ Add Analysis Section", on_click=add_new_section, key="add_section_btn")
@@ -114,6 +143,7 @@ st.button("➕ Add Analysis Section", on_click=add_new_section, key="add_section
 if not st.session_state.analysis_sections:
     st.warning("Click 'Add Analysis Section' to begin.")
 
+# Iterate directly over the list. Streamlit's execution model handles changes.
 for section in st.session_state.analysis_sections:
     section_id = section['id']
 
@@ -125,7 +155,7 @@ for section in st.session_state.analysis_sections:
     expander_title = f"Analysis Section {section_id} (File: {file_name_for_title})"
     with st.expander(expander_title, expanded=True):
 
-        col1, col2, col3 = st.columns([1, 3, 1.5])
+        col1, col2, col3 = st.columns([1, 3, 1.5]) # Config | Plot | Input
 
         # --- Column 1: File Upload & Config ---
         with col1:
@@ -133,11 +163,10 @@ for section in st.session_state.analysis_sections:
             uploaded_file = st.file_uploader(f"Upload Data File ({section_id})", type=["xlsx", "xls", "csv"], key=f"uploader_{section_id}", accept_multiple_files=False)
 
             if uploaded_file is not None:
-                # <<< FIX: Safely get current file name before comparing >>>
+                # Safely get current file name before comparing
                 current_file_name = None
                 file_info_current = section.get('file_info')
-                if isinstance(file_info_current, dict):
-                    current_file_name = file_info_current.get('name')
+                if isinstance(file_info_current, dict): current_file_name = file_info_current.get('name')
 
                 if current_file_name != uploaded_file.name:
                     logger.info(f"Processing new file '{uploaded_file.name}' for section {section_id}")
@@ -182,6 +211,7 @@ for section in st.session_state.analysis_sections:
                 # Get numeric cols
                 temp_smoothed_df = None; numeric_cols = []
                 try:
+                    # Use selected smooth method for column selection
                     temp_smoothed_df = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
                     if temp_smoothed_df is not None and not temp_smoothed_df.empty: numeric_cols = temp_smoothed_df.select_dtypes(include=np.number).columns.tolist()
                     if not numeric_cols: logger.warning(f"No numeric cols after smooth (Sect {section_id})."); numeric_cols = df_prepared_sec.select_dtypes(include=np.number).columns.tolist()
@@ -209,9 +239,11 @@ for section in st.session_state.analysis_sections:
                 if new_y != config['y_col']: config['y_col'] = new_y; needs_plot_update = True
 
                 # Update smoothed data if needed
+                # Also update if df_display is missing, or if relevant config changed
                 if needs_plot_update or section.get('df_display') is None:
-                     logger.info(f"Updating smoothed data for plot (Sect {section_id})")
+                     logger.info(f"Updating smoothed data for plot (Sect {section_id}) - Reason: needs_update={needs_plot_update}, df_display_missing={section.get('df_display') is None}")
                      try:
+                         # Always re-calculate smoothing when config changes
                          section['df_display'] = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
                          section['plot_fig'] = None # Force plot regeneration
                      except Exception as e_final_smooth: st.error(f"Smooth fail: {e_final_smooth}"); logger.error(f"Final smooth fail (Sect {section_id})", exc_info=True); section['df_display'] = None
@@ -229,24 +261,33 @@ for section in st.session_state.analysis_sections:
                 if section.get('plot_fig') is None: # Regenerate if needed
                      logger.info(f"Regenerating plot for section {section_id}")
                      section['plot_fig'] = create_plot(df_display_sec, x_col_sec, y_col_sec, config_sec['smooth'], section['metadata'], section['segments'], section_id)
+
                 fig_to_display = section.get('plot_fig')
                 if fig_to_display:
                     plot_chart_key = f"chart_{section_id}"
+                    # Ensure on_select is set to trigger reruns for click interactions
                     event_data = st.plotly_chart(fig_to_display, key=plot_chart_key, use_container_width=True, on_select="rerun")
+
+                    # Handle plot selection event FOR THIS SECTION
                     select_info = event_data.get('select') if event_data else None
                     points_data = select_info.get('points', []) if select_info else None
                     is_new_event_sec = (points_data is not None and points_data != section.get('last_select_event'))
+
                     if is_new_event_sec:
-                        section['last_select_event'] = points_data
+                        section['last_select_event'] = points_data # Store event data
+                        # Process clicks even if dragmode is 'zoom'
                         if len(points_data) >= 1:
-                            x_sel, y_sel = points_data[0].get('x'), points_data[0].get('y')
+                            logger.info(f"Plot click/select event (Sect {section_id}): {len(points_data)} pts.")
+                            selected_point = points_data[0] # Use first point of selection
+                            x_sel, y_sel = selected_point.get('x'), selected_point.get('y')
                             if x_sel is not None and y_sel is not None:
                                 target = section['selection_target']; mi_sec = section['manual_input']
                                 if target == 'P1': mi_sec['x1'] = x_sel; mi_sec['y1'] = y_sel; section['selection_target'] = 'P2'
                                 elif target == 'P2': mi_sec['x2'] = x_sel; mi_sec['y2'] = y_sel; section['selection_target'] = 'P1'
-                                logger.debug(f"Updated Manual {target} from plot (Sect {section_id})")
-                                st.rerun()
-                            else: logger.warning(f"Selection point missing coords (Sect {section_id}).")
+                                logger.debug(f"Updated Manual {target} from plot click (Sect {section_id})")
+                                st.rerun() # Rerun needed to update number inputs
+                            else: logger.warning(f"Plot click point missing coords (Sect {section_id}).")
+                        # else: Selection cleared or no points, ignore
                 else: st.warning("Plot could not be generated.")
             else: st.caption("Configure axes and smoothing after upload.")
 
