@@ -139,7 +139,7 @@ elif not uploaded_files and st.session_state.get('files_processed_flag'):
 if not st.session_state.processed_data: st.warning("Upload data file(s).")
 else:
     # --- Layout ---
-    plot_col, manual_col, config_col = st.columns([2, 2, 1]) # Adjust ratios as needed
+    plot_col, manual_col, config_col = st.columns([2, 1.5, 1]) # Adjust ratios as needed
 
     # --- Configuration Column ---
     with config_col:
