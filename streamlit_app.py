@@ -1,4 +1,4 @@
-# streamlit_app.py (Multi-Section Version - Full Updated Code v7 - onClick Fix)
+# streamlit_app.py (Multi-Section Version - Full Updated Code v8 - onClick State Fix)
 
 import streamlit as st
 import pandas as pd
@@ -19,7 +19,7 @@ except ImportError:
     st.stop()
 
 # --- Configuration ---
-APP_TITLE = "Multi-Analysis Segmenter (v7 - onClick Fix)"
+APP_TITLE = "Multi-Analysis Segmenter (v8 - onClick State Fix)"
 LOG_LEVEL = logging.INFO
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ for section in st.session_state.analysis_sections:
                 if isinstance(file_info_current, dict): current_file_name = file_info_current.get('name')
                 if current_file_name != uploaded_file.name:
                     logger.info(f"Processing new file '{uploaded_file.name}' for section {section_id}")
-                    section['prepared_df']=None; section['metadata']={}; section['plot_config']={'smooth': "Raw Data",'x_col': None,'y_col': None}; section['df_display']=None; section['segments']=[]; section['manual_input']={'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target']='P1'; section['last_select_event']=None; section['plot_fig']=None
+                    section['prepared_df']=None; section['metadata']={}; section['plot_config']={'smooth':"Raw Data",'x_col':None,'y_col':None}; section['df_display']=None; section['segments']=[]; section['manual_input']={'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target']='P1'; section['last_select_event']=None; section['plot_fig']=None
                     try:
                         filename = uploaded_file.name; metadata_parsed, unique_key = dp.parse_filename(filename)
                         if unique_key is None: unique_key = filename
@@ -148,7 +148,7 @@ for section in st.session_state.analysis_sections:
                         if raw_df is not None:
                             prepared_df = dp.prepare_data(raw_df)
                             if prepared_df is not None and not prepared_df.empty:
-                                section['file_info'] = {'name': filename, 'unique_key': unique_key}; section['prepared_df'] = prepared_df; section['metadata'] = metadata_parsed or {'filename': filename, 'display_name': filename}
+                                section['file_info']={'name':filename,'unique_key':unique_key}; section['prepared_df']=prepared_df; section['metadata']=metadata_parsed or {'filename':filename,'display_name':filename}
                                 st.success(f"Loaded: {filename}"); st.rerun()
                             else: st.error(f"Data prep failed: {filename}."); section['prepared_df'] = None
                         else: st.error(f"File load failed: {filename}."); section['prepared_df'] = None
@@ -164,7 +164,8 @@ for section in st.session_state.analysis_sections:
                 numeric_cols = [];
                 try:
                     df_display_for_cols = section.get('df_display')
-                    if df_display_for_cols is None or needs_config_rerun or section.get('plot_fig') is None: # Update df_display if config changed or plot needs regen
+                    # Update df_display if config changed OR plot needs regenerating (plot_fig is None)
+                    if needs_config_rerun or section.get('plot_fig') is None:
                          df_display_for_cols = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
                          section['df_display'] = df_display_for_cols
                     if df_display_for_cols is not None and not df_display_for_cols.empty: numeric_cols = df_display_for_cols.select_dtypes(include=np.number).columns.tolist()
@@ -189,7 +190,7 @@ for section in st.session_state.analysis_sections:
                 if new_y != config['y_col']: config['y_col'] = new_y; section['plot_fig'] = None; needs_config_rerun = True
 
                 if needs_config_rerun:
-                    if section.get('plot_fig') is None: # Update df_display again if plot needs regen anyway
+                    if section.get('plot_fig') is None: # Ensure df_display is consistent if plot needs regen
                         try: section['df_display'] = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
                         except Exception as e_smooth_rerun: st.error(f"Smooth error: {e_smooth_rerun}"); section['df_display'] = None
                     st.rerun()
@@ -205,20 +206,26 @@ for section in st.session_state.analysis_sections:
                      section['plot_fig'] = create_plot(df_display_sec, x_col_sec, y_col_sec, config_sec.get('smooth','Raw Data'), metadata_sec, segments_sec, section_id)
                 fig_to_display = section.get('plot_fig')
                 if fig_to_display:
+                    # Define the unique key for the plot chart
                     plot_chart_key = f"chart_{section_id}"
-                    # <<< Using on_click >>>
-                    event_data = st.plotly_chart(fig_to_display, key=plot_chart_key, use_container_width=True, on_click="rerun")
+                    # Render the chart, on_click triggers rerun
+                    st.plotly_chart(fig_to_display, key=plot_chart_key, use_container_width=True, on_click="rerun")
 
-                    # --- Handle Plot CLICK Event ---
-                    # <<< Adapted event handling >>>
-                    if event_data and event_data != section.get('last_select_event'):
-                        section['last_select_event'] = event_data
-                        logger.info(f"Plot click event (Sect {section_id}): {event_data}")
+                    # --- Handle Plot CLICK Event FOR THIS SECTION ---
+                    # <<< FIX: Get event data from session_state[key] >>>
+                    click_event_data = st.session_state.get(plot_chart_key)
+
+                    # Process event data if it exists and is new
+                    if click_event_data and click_event_data != section.get('last_select_event'):
+                        section['last_select_event'] = click_event_data # Store raw event from state
+                        logger.info(f"Plot click event detected (Sect {section_id}): {click_event_data}")
+
+                        # Try to extract point data (structure might vary slightly)
                         clicked_point_data = None
-                        if isinstance(event_data, list) and len(event_data) > 0: clicked_point_data = event_data[0]
-                        elif isinstance(event_data, dict):
-                            if 'points' in event_data and isinstance(event_data['points'], list) and len(event_data['points']) > 0: clicked_point_data = event_data['points'][0]
-                            else: clicked_point_data = event_data # Assume dict is the point
+                        if isinstance(click_event_data, list) and len(click_event_data) > 0: clicked_point_data = click_event_data[0]
+                        elif isinstance(click_event_data, dict):
+                            if 'points' in click_event_data and isinstance(click_event_data['points'], list) and len(click_event_data['points']) > 0: clicked_point_data = click_event_data['points'][0]
+                            else: clicked_point_data = click_event_data
 
                         if isinstance(clicked_point_data, dict):
                             x_sel = clicked_point_data.get('x'); y_sel = clicked_point_data.get('y')
@@ -226,9 +233,16 @@ for section in st.session_state.analysis_sections:
                                 target = section['selection_target']; mi_sec = section['manual_input']
                                 if target == 'P1': mi_sec['x1'] = x_sel; mi_sec['y1'] = y_sel; section['selection_target'] = 'P2'
                                 elif target == 'P2': mi_sec['x2'] = x_sel; mi_sec['y2'] = y_sel; section['selection_target'] = 'P1'
-                                logger.debug(f"Updated Manual {target} from plot click (Sect {section_id})"); st.rerun()
-                            else: logger.warning(f"Click point missing coords (Sect {section_id}). Data: {clicked_point_data}")
-                        else: logger.warning(f"Could not extract point data dict from click event (Sect {section_id}). Event: {event_data}")
+                                logger.debug(f"Updated Manual {target} from plot click (Sect {section_id})")
+                                # Clear state value *after processing*
+                                st.session_state[plot_chart_key] = None
+                                st.rerun() # Rerun needed
+                            else:
+                                logger.warning(f"Click point missing coords (Sect {section_id}). Data: {clicked_point_data}")
+                                st.session_state[plot_chart_key] = None # Clear state
+                        else:
+                             logger.warning(f"Could not extract point data dict (Sect {section_id}). Event State: {click_event_data}")
+                             st.session_state[plot_chart_key] = None # Clear state
                 else: st.warning("Plot could not be generated.")
             else: st.caption("Configure axes and smoothing after upload.")
 
@@ -279,7 +293,6 @@ for section in st.session_state.analysis_sections:
         # --- Section Footer ---
         st.markdown("---")
         st.button(f"❌ Remove Section {section_id}", key=f"remove_{section_id}", on_click=remove_section, args=(section_id,), type="secondary")
-
 
 # --- Footer ---
 st.sidebar.markdown("---")
