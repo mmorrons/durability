@@ -1,4 +1,4 @@
-# data_processing.py (Caching Disabled Version - Smoothing Fix Attempt)
+# data_processing.py (Caching Disabled - Simpler "Sec MA" Logic)
 
 import pandas as pd
 import numpy as np
@@ -40,7 +40,7 @@ def parse_filename(filename):
         unique_key = f"{prefix}{subject_id}_{surname}_{name}_{test_code}"
         display_name = f"{name} {surname} (ID: {subject_id}) - {test_description}"
         metadata = {"filename": filename, "unique_key": unique_key, "display_name": display_name, "subject_id": subject_id, "surname": surname, "name": name, "test_code": test_code, "test_description": test_description, "prefix": prefix }
-        logger.info(f"Parsed metadata for {filename}: {display_name}")
+        # logger.info(f"Parsed metadata for {filename}: {display_name}") # Keep logs less verbose unless debugging
         return metadata, unique_key
     except Exception as e: logger.error(f"Error parsing filename '{filename}': {e}", exc_info=True); return None, filename
 
@@ -63,7 +63,7 @@ def load_data(file_content_or_path, filename):
     """Loads data from file content (BytesIO) or path, using filename to determine type."""
     logger.info(f"Loading data for: {filename} (Cache DISABLED)")
     df = None
-    is_stream = hasattr(file_content_or_path, 'seek') # Check if it's a stream (like BytesIO)
+    is_stream = hasattr(file_content_or_path, 'seek')
     try:
         if filename.lower().endswith('.csv'):
             try:
@@ -97,22 +97,18 @@ def prepare_data(df_raw):
     """Prepares raw data: time conversion, Watt derivation, START/STOP filter, numeric conversion."""
     filename = df_raw.attrs.get('filename', 'N/A')
     logger.info(f"[{filename}] Starting data preparation (Cache DISABLED)")
-    if df_raw is None or not isinstance(df_raw, pd.DataFrame) or df_raw.empty: logger.error(f"[{filename}] Invalid input DataFrame to prepare_data."); return None
+    if df_raw is None or not isinstance(df_raw, pd.DataFrame) or df_raw.empty: logger.error(f"[{filename}] Invalid input DataFrame."); return None
     df = df_raw.copy(); initial_rows = len(df)
     marker_col_present = MARKER_COL in df.columns
     if not marker_col_present: logger.warning(f"[{filename}] Marker col '{MARKER_COL}' not found.")
 
-    rows_dropped_time = 0
     if RAW_TIME_COL in df.columns:
         logger.info(f"[{filename}] Converting time col '{RAW_TIME_COL}' -> '{TIME_COL_SECONDS}'")
         df[TIME_COL_SECONDS] = df[RAW_TIME_COL].apply(time_str_to_seconds)
         invalid_time_count = df[TIME_COL_SECONDS].isnull().sum()
-        if invalid_time_count > 0:
-            logger.warning(f"[{filename}] Found {invalid_time_count} invalid times. Removing rows.")
-            df.dropna(subset=[TIME_COL_SECONDS], inplace=True)
-            rows_dropped_time = initial_rows - len(df)
+        if invalid_time_count > 0: logger.warning(f"[{filename}] Found {invalid_time_count} invalid times. Removing rows."); df.dropna(subset=[TIME_COL_SECONDS], inplace=True)
         df[TIME_COL_SECONDS] = pd.to_numeric(df[TIME_COL_SECONDS], errors='coerce')
-        df.sort_values(by=TIME_COL_SECONDS, inplace=True, na_position='last')
+        df.sort_values(by=TIME_COL_SECONDS, inplace=True, na_position='last') # Ensure sorted by time
     else: logger.warning(f"[{filename}] Raw time col '{RAW_TIME_COL}' not found."); return None
     if df.empty: logger.error(f"[{filename}] DataFrame empty after time cleaning."); return None
 
@@ -121,8 +117,7 @@ def prepare_data(df_raw):
         try:
             watt_regex = re.compile(r'^\s*(\d+(\.\d+)?)\s*W?\s*$', re.IGNORECASE)
             watt_values = df[MARKER_COL].astype(str).str.extract(watt_regex, expand=False)[0]
-            df[WATT_COL] = pd.to_numeric(watt_values, errors='coerce')
-            df[WATT_COL].ffill(inplace=True)
+            df[WATT_COL] = pd.to_numeric(watt_values, errors='coerce'); df[WATT_COL].ffill(inplace=True)
             start_indices = df.index[df[MARKER_COL].astype(str).str.upper().str.strip() == 'START']
             first_start_idx = start_indices[0] if not start_indices.empty else -1
             if first_start_idx != -1: df.loc[:first_start_idx, WATT_COL] = df.loc[:first_start_idx, WATT_COL].fillna(0)
@@ -142,8 +137,7 @@ def prepare_data(df_raw):
             logger.info(f"[{filename}] Found START at index {start_idx}.")
             if stop_idx != -1 and stop_idx > start_idx:
                  logger.info(f"[{filename}] Found STOP at index {stop_idx}.")
-                 df_filtered = df.loc[start_idx:stop_idx].copy()
-                 logger.info(f"[{filename}] Filtered between START/STOP, {len(df_filtered)} rows remain.")
+                 df_filtered = df.loc[start_idx:stop_idx].copy(); logger.info(f"[{filename}] Filtered between START/STOP, {len(df_filtered)} rows.")
             else: logger.warning(f"[{filename}] No valid STOP after START. Using data from START onwards."); df_filtered = df.loc[start_idx:].copy()
         else: logger.warning(f"[{filename}] No START marker found. Using all rows."); df_filtered = df.copy()
     else: logger.warning(f"[{filename}] No '{MARKER_COL}', skipping START/STOP filter."); df_filtered = df.copy()
@@ -165,8 +159,7 @@ def prepare_data(df_raw):
     for col in df_filtered.columns:
         if pd.api.types.is_numeric_dtype(df_filtered[col]): continue
         if col in [RAW_TIME_COL, MARKER_COL, WATT_COL, TIME_COL_SECONDS]: continue
-        original_dtype = str(df_filtered[col].dtype)
-        converted_col = pd.to_numeric(df_filtered[col], errors='coerce')
+        original_dtype = str(df_filtered[col].dtype); converted_col = pd.to_numeric(df_filtered[col], errors='coerce')
         if converted_col.isnull().all() and not df_filtered[col].isnull().all():
              logger.debug(f"[{filename}] Direct numeric conv failed '{col}', trying comma replace...")
              try:
@@ -174,37 +167,46 @@ def prepare_data(df_raw):
              except Exception as e_replace: logger.warning(f"[{filename}] Err comma replace '{col}': {e_replace}")
         if not converted_col.isnull().all():
             df_filtered[col] = converted_col
-            if str(df_filtered[col].dtype) != original_dtype: cols_converted.append(col); logger.debug(f"[{filename}] Converted '{col}' to numeric.")
-        else: cols_failed.append(col); logger.debug(f"[{filename}] Failed convert '{col}' to numeric.")
+            if str(df_filtered[col].dtype) != original_dtype: cols_converted.append(col); logger.debug(f"[{filename}] Converted '{col}' numeric.")
+        else: cols_failed.append(col); logger.debug(f"[{filename}] Failed convert '{col}' numeric.")
     if cols_converted: logger.info(f"[{filename}] Columns converted: {cols_converted}")
     if cols_failed: logger.warning(f"[{filename}] Columns failed conversion: {cols_failed}")
 
-    df_filtered.reset_index(drop=True, inplace=True)
+    df_filtered.reset_index(drop=True, inplace=True) # Ensure simple 0-based index
     df_filtered.attrs['filename'] = filename
-    final_rows = len(df_filtered); rows_dropped_total = initial_rows - final_rows
-    logger.info(f"[{filename}] Prep finished. Shape: {df_filtered.shape}. Rows dropped: {rows_dropped_total}")
+    logger.info(f"[{filename}] Prep finished. Shape: {df_filtered.shape}.")
     return df_filtered
 
-
-# --- Smoothing Function (Modified "Sec MA" logic) ---
+# --- Smoothing Function (Simpler "Sec MA" logic) ---
 def apply_smoothing(df_prepared, method, time_col_sec):
     """Applies selected smoothing to the prepared data DataFrame."""
     filename = df_prepared.attrs.get('filename', 'N/A')
     logger.info(f"[{filename}] Applying smoothing: {method} (Cache DISABLED)")
 
-    if df_prepared is None or df_prepared.empty: logger.warning(f"[{filename}] Input DataFrame for smoothing empty/None."); return df_prepared
-    if not isinstance(df_prepared, pd.DataFrame): logger.error(f"[{filename}] Invalid input type for smoothing: {type(df_prepared)}"); return None
-    if method == "Raw Data": logger.debug(f"[{filename}] Smoothing 'Raw Data', returning copy."); return df_prepared.copy()
+    if df_prepared is None or df_prepared.empty: logger.warning(f"[{filename}] Input DataFrame empty/None."); return df_prepared
+    if not isinstance(df_prepared, pd.DataFrame): logger.error(f"[{filename}] Invalid input type: {type(df_prepared)}"); return None
+    if method == "Raw Data": logger.debug(f"[{filename}] 'Raw Data', returning copy."); return df_prepared.copy()
 
-    cols_to_exclude = [time_col_sec, 'subject_id', 'ID', 'index'] # Known non-signal numeric cols
+    # Ensure data is sorted by time for reliable rolling, especially time-based
+    if time_col_sec in df_prepared.columns and pd.api.types.is_numeric_dtype(df_prepared[time_col_sec]):
+        if not df_prepared[time_col_sec].is_monotonic_increasing:
+             logger.warning(f"[{filename}] Data not sorted by time ('{time_col_sec}'). Sorting before smoothing.")
+             df_prepared = df_prepared.sort_values(by=time_col_sec).reset_index(drop=True)
+    else:
+        logger.error(f"[{filename}] Time column '{time_col_sec}' missing or not numeric. Cannot apply time-based smoothing or guarantee order.")
+        # Depending on requirements, either return error or proceed with potentially incorrect breath MA
+        # Let's return original for safety if time column is bad
+        return df_prepared.copy()
+
+
+    cols_to_exclude = [time_col_sec, 'subject_id', 'ID', 'index']
     numeric_cols = df_prepared.select_dtypes(include=np.number).columns.tolist()
     cols_to_smooth = [col for col in numeric_cols if col not in cols_to_exclude]
 
     if not cols_to_smooth: logger.warning(f"[{filename}] No numeric columns found to smooth."); return df_prepared.copy()
 
-    cols_to_keep = df_prepared.columns.difference(cols_to_smooth).tolist()
-    # Start with the columns we are not smoothing
-    df_smoothed_final = df_prepared[cols_to_keep].copy()
+    # Create the result DataFrame starting with a copy
+    df_smoothed_final = df_prepared.copy()
     logger.debug(f"[{filename}] Columns to smooth: {cols_to_smooth}")
 
     try:
@@ -212,59 +214,49 @@ def apply_smoothing(df_prepared, method, time_col_sec):
             match = re.search(r'(\d+)\s*Breath', method); assert match
             window_size = int(match.group(1)); assert window_size > 0
             logger.debug(f"[{filename}] Applying {window_size}-breath rolling mean.")
-            # Calculate smoothed data for target columns
+            # Calculate and update smoothed columns directly
             smoothed_data = df_prepared[cols_to_smooth].rolling(window=window_size, min_periods=1).mean()
-            # Add smoothed columns to the final df
             df_smoothed_final[cols_to_smooth] = smoothed_data
 
         elif "Sec" in method:
-            if time_col_sec not in df_prepared.columns: raise ValueError(f"Time col '{time_col_sec}' missing.")
-            if not pd.api.types.is_numeric_dtype(df_prepared[time_col_sec]): raise ValueError(f"Time col '{time_col_sec}' not numeric.")
-
             match = re.search(r'(\d+)\s*Sec', method); assert match
             seconds = int(match.group(1)); assert seconds > 0
             time_window_str = f"{seconds}s"
             logger.debug(f"[{filename}] Applying {time_window_str} time rolling mean on '{time_col_sec}'.")
 
-            # --- Refined Time Smoothing ---
-            # 1. Work on a copy containing time and columns to smooth
-            df_temp = df_prepared[[time_col_sec] + cols_to_smooth].copy()
-            # 2. Convert time column to timedelta FOR ROLLING (don't set as index yet)
-            time_deltas = pd.to_timedelta(df_temp[time_col_sec], unit='s', errors='coerce')
-            if time_deltas.isnull().any(): logger.warning(f"[{filename}] Found NaN values after converting '{time_col_sec}' to timedelta. Smoothing might be affected.")
+            # --- Simplified Time Smoothing Logic ---
+            # 1. Convert time column to timedelta directly in the working DataFrame
+            time_deltas = pd.to_timedelta(df_smoothed_final[time_col_sec], unit='s', errors='coerce')
+            if time_deltas.isnull().any():
+                logger.warning(f"[{filename}] Found NaN values after converting '{time_col_sec}' to timedelta. Rolling might ignore these points.")
+                # Optionally handle NaT rows here if needed, e.g., drop them for rolling
+                # df_smoothed_final = df_smoothed_final.dropna(subset=[time_col_sec]) # Or handle differently
+                # time_deltas = time_deltas.dropna()
 
-            # 3. Perform rolling calculation using 'on=' argument with the timedelta series
-            #    Make sure the DataFrame is sorted by time before rolling on time delta
-            df_temp = df_temp.sort_values(by=time_col_sec)
-            time_deltas = time_deltas.loc[df_temp.index] # Ensure timedelta series matches sorted index
+            # 2. Perform rolling directly on the DataFrame, using the time column name in `on`
+            #    Requires pandas >= 1.1 (Check pandas version if this fails)
+            #    The DataFrame MUST be sorted by the time column for 'on=' to work correctly.
+            #    We ensured sorting at the beginning of the function.
+            rolling_obj = df_smoothed_final[cols_to_smooth].rolling(window=time_window_str, on=time_deltas, min_periods=1, closed='right')
+            smoothed_data = rolling_obj.mean()
 
-            rolling_on_time = df_temp[cols_to_smooth].rolling(window=time_window_str, on=time_deltas, min_periods=1, closed='right')
-            smoothed_data = rolling_on_time.mean() # This result aligns with df_temp's index
-
-            # 4. Assign results back to the df_smoothed_final using the index
-            #    Since df_temp was sorted, smoothed_data index matches sorted df_temp.
-            #    df_smoothed_final index matches original df_prepared.
-            #    Use the original index from df_prepared to assign correctly.
-            df_smoothed_final[cols_to_smooth] = smoothed_data.reindex(df_prepared.index)
-            # --- End Refined Time Smoothing ---
+            # 3. Assign the results back. Indices should align as rolling was done on the same df.
+            df_smoothed_final[cols_to_smooth] = smoothed_data
+            # --- End Simplified Time Smoothing Logic ---
 
         else: raise ValueError(f"Unknown smoothing method: {method}")
 
-        # Restore original column order if possible
-        try: df_smoothed_final = df_smoothed_final[df_prepared.columns]
-        except KeyError: logger.warning(f"[{filename}] Could not restore original column order after smoothing.")
         df_smoothed_final.attrs['filename'] = filename
-        logger.info(f"[{filename}] Smoothing '{method}' applied successfully.")
+        logger.info(f"[{filename}] Smoothing '{method}' applied successfully. Result shape: {df_smoothed_final.shape}")
         return df_smoothed_final
 
     except Exception as e:
         logger.error(f"[{filename}] Error applying smoothing '{method}': {e}", exc_info=True)
         return df_prepared.copy() # Fallback on error
 
-
 def calculate_slope(p1, p2):
     """Calculates slope between two points (tuples), handles vertical lines."""
-    if p1 is None or p2 is None: logger.warning("Slope calculation received None point."); return 0
+    if p1 is None or p2 is None: logger.warning("Slope received None point."); return 0
     if not (isinstance(p1,(tuple,list)) and len(p1)==2 and isinstance(p2,(tuple,list)) and len(p2)==2): logger.warning(f"Invalid point format for slope: p1={p1}, p2={p2}"); return 0
     try: x1, y1 = float(p1[0]), float(p1[1]); x2, y2 = float(p2[0]), float(p2[1])
     except (ValueError, TypeError) as e: logger.warning(f"Non-numeric coords for slope: p1={p1}, p2={p2}, Error: {e}"); return 0
