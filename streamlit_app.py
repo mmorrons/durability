@@ -75,7 +75,6 @@ def create_plot(df, x_col, y_col, smoothing_method, metadata, segments):
 # --- Streamlit App ---
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title(APP_TITLE)
-# <<< MODIFICATO: Istruzioni aggiornate per il pulsante Applica >>>
 st.info("""
 **Instructions:**
 1. Load file(s).
@@ -113,50 +112,64 @@ if 'files_processed_flag' not in st.session_state: st.session_state.files_proces
 # --- File Upload & Processing ---
 uploaded_files = st.file_uploader("Upload Data File(s)", type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="file_uploader_main")
 
-# <<< MODIFICATO: Resetta lo stato del grafico quando si caricano nuovi file >>>
-files_were_uploaded = bool(uploaded_files)
-files_are_new = files_were_uploaded and not st.session_state.get('files_processed_flag', False)
+# Rileva se sono stati caricati *nuovi* file rispetto all'ultimo controllo
+# (Questo richiede una logica un po' più sofisticata per tracciare i file già visti,
+# ma per ora modifichiamo la logica di base per *aggiungere* invece di *resettare*)
 
-if files_are_new:
-    new_files_count = 0; error_files = []
-    with st.spinner("Processing..."):
-        st.session_state.processed_data = {} # Clear old data on new upload
-        st.session_state.current_selected_key = None # Resetta la selezione corrente
-        # --- Reset state related to plotting and config confirmation ---
-        st.session_state.last_figure = None
-        st.session_state.last_applied_config = {}
-        st.session_state.current_x_col = None
-        st.session_state.current_y_col = None
-        st.session_state.current_smoothing = "Raw Data"
-        st.session_state.segments = []
-        st.session_state.manual_x1, st.session_state.manual_y1 = None, None
-        st.session_state.manual_x2, st.session_state.manual_y2 = None, None
-        st.session_state.selection_target = 'P1'
-        st.session_state.last_select_event_data = None
-        # --- End Reset ---
+# Verifica se ci sono file caricati *in questa esecuzione*
+if uploaded_files:
+    # Flag per indicare se sono stati processati nuovi file in questo ciclo
+    new_files_processed_this_run = False
+    error_files_this_run = []
+    files_to_process = []
 
-        for uploaded_file in uploaded_files:
-            filename = uploaded_file.name; file_content_buffer = io.BytesIO(uploaded_file.getvalue())
-            metadata, unique_key = dp.parse_filename(filename)
-            if unique_key is None: unique_key = filename
-            logging.info(f"Processing: {filename}"); raw_df = dp.load_data(file_content_buffer, filename)
-            if raw_df is not None:
-                prepared_df = dp.prepare_data(raw_df)
-                if prepared_df is not None and not prepared_df.empty:
-                    st.session_state.processed_data[unique_key] = {'metadata': metadata or {'filename': filename, 'display_name': filename}, 'prepared_df': prepared_df}
-                    if st.session_state.current_selected_key is None: st.session_state.current_selected_key = unique_key # Select first successfully processed file
-                    new_files_count += 1
-                else: error_files.append(filename)
-            else: error_files.append(filename)
-    if new_files_count > 0: st.success(f"Processed {new_files_count} file(s).")
-    if error_files: st.error(f"Failed: {', '.join(error_files)}")
-    st.session_state.files_processed_flag = True
-    st.rerun() # Rerun immediately after processing to reflect changes
-elif not files_were_uploaded and st.session_state.get('files_processed_flag'):
-     st.session_state.files_processed_flag = False # Reset flag if files are removed
+    # Inizializza processed_data se non esiste
+    if 'processed_data' not in st.session_state:
+        st.session_state.processed_data = {}
 
+    # Identifica i file che non sono già stati processati
+    for uploaded_file in uploaded_files:
+        filename = uploaded_file.name
+        metadata, unique_key = dp.parse_filename(filename)
+        if unique_key is None: unique_key = filename
+
+        # Processa solo se la chiave non è già presente o se vuoi permettere l'aggiornamento
+        # Qui assumiamo di NON riprocessare file con la stessa chiave
+        if unique_key not in st.session_state.processed_data:
+            files_to_process.append((uploaded_file, filename, unique_key))
+        # else:
+        #     logging.info(f"Skipping already processed file: {filename} (Key: {unique_key})")
+
+
+    if files_to_process:
+        with st.spinner(f"Processing {len(files_to_process)} new file(s)..."):
+            for uploaded_file, filename, unique_key in files_to_process:
+                file_content_buffer = io.BytesIO(uploaded_file.getvalue())
+                logging.info(f"Processing new file: {filename}")
+                raw_df = dp.load_data(file_content_buffer, filename)
+                if raw_df is not None:
+                    prepared_df = dp.prepare_data(raw_df)
+                    if prepared_df is not None and not prepared_df.empty:
+                        # --- MODIFICA CHIAVE: Aggiungi al dizionario esistente ---
+                        metadata_parsed, _ = dp.parse_filename(filename) # Ricalcola metadata qui se serve aggiornarlo
+                        st.session_state.processed_data[unique_key] = {
+                            'metadata': metadata_parsed or {'filename': filename, 'display_name': filename},
+                            'prepared_df': prepared_df
+                        }
+                        # ---------------------------------------------------------
+                        new_files_processed_this_run = True
+                    else: error_files_this_run.append(filename)
+                else: error_files_this_run.append(filename)
+
+        if new_files_processed_this_run:
+             st.success(f"Processed {len(files_to_process) - len(error_files_this_run)} new file(s).")
+        if error_files_this_run:
+             st.error(f"Failed to process: {', '.join(error_files_this_run)}")
+        # Non serve più st.session_state.files_processed_flag se gestiamo così
+        st.rerun() # Rerun per aggiornare la UI dopo l'aggiunta
 # --- Main Area ---
-if not st.session_state.processed_data: st.warning("Upload data file(s).")
+if not st.session_state.processed_data:
+     st.warning("Upload data file(s).")
 else:
     # --- Layout ---
     plot_col, manual_col, config_col = st.columns([2, 1.5, 1]) # Adjust ratios as needed
