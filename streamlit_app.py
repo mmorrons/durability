@@ -1,4 +1,4 @@
-# streamlit_app.py (Multi-Section Version - Full Updated Code v6 - on_click)
+# streamlit_app.py (Multi-Section Version - Full Updated Code v7 - onClick Fix)
 
 import streamlit as st
 import pandas as pd
@@ -19,7 +19,7 @@ except ImportError:
     st.stop()
 
 # --- Configuration ---
-APP_TITLE = "Multi-Analysis Segmenter (v6 - onClick)"
+APP_TITLE = "Multi-Analysis Segmenter (v7 - onClick Fix)"
 LOG_LEVEL = logging.INFO
 logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ st.info("""
     g. Click "Remove Section" to delete an analysis area.
 """)
 
-# --- Session State Initialization for Multi-Section ---
+# --- Session State Initialization ---
 if 'analysis_sections' not in st.session_state:
     st.session_state.analysis_sections = []
 
@@ -121,69 +121,56 @@ for section in st.session_state.analysis_sections:
     section_id = section['id']
 
     # Construct new expander title safely
-    metadata = section.get('metadata', {})
-    config = section.get('plot_config', {})
+    metadata = section.get('metadata', {}); config = section.get('plot_config', {})
     name = metadata.get('name', ''); surname = metadata.get('surname', 'UnknownSubject')
-    y_var = config.get('y_col', 'Y'); x_var = config.get('x_col', 'X')
-    smooth_type = config.get('smooth', 'Raw Data')
+    y_var = config.get('y_col', 'Y'); x_var = config.get('x_col', 'X'); smooth_type = config.get('smooth', 'Raw Data')
     subject_name = f"{name} {surname}".strip()
     if not subject_name: subject_name = metadata.get('display_name', f"Section {section_id}")
     expander_title = f"{subject_name}: {y_var} vs {x_var} ({smooth_type})"
 
     with st.expander(expander_title, expanded=True):
-
-        col1, col2, col3 = st.columns([1, 3, 1.5]) # Config | Plot | Input
+        col1, col2, col3 = st.columns([1, 3, 1.5])
 
         # --- Column 1: File Upload & Config ---
         with col1:
             st.subheader("1. Load & Configure")
             uploaded_file = st.file_uploader(f"Upload Data File ({section_id})", type=["xlsx", "xls", "csv"], key=f"uploader_{section_id}", accept_multiple_files=False)
-
             if uploaded_file is not None:
-                current_file_name = None
-                file_info_current = section.get('file_info')
+                current_file_name = None; file_info_current = section.get('file_info')
                 if isinstance(file_info_current, dict): current_file_name = file_info_current.get('name')
-
                 if current_file_name != uploaded_file.name:
                     logger.info(f"Processing new file '{uploaded_file.name}' for section {section_id}")
-                    # Reset section state
-                    section['prepared_df']=None; section['metadata']={}; section['plot_config']={'smooth': "Raw Data", 'x_col': None, 'y_col': None}; section['df_display']=None; section['segments']=[]; section['manual_input']={'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target']='P1'; section['last_select_event']=None; section['plot_fig']=None
+                    section['prepared_df']=None; section['metadata']={}; section['plot_config']={'smooth': "Raw Data",'x_col': None,'y_col': None}; section['df_display']=None; section['segments']=[]; section['manual_input']={'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target']='P1'; section['last_select_event']=None; section['plot_fig']=None
                     try:
                         filename = uploaded_file.name; metadata_parsed, unique_key = dp.parse_filename(filename)
                         if unique_key is None: unique_key = filename
-                        file_content_buffer = io.BytesIO(uploaded_file.getvalue())
-                        raw_df = dp.load_data(file_content_buffer, filename)
+                        file_content_buffer = io.BytesIO(uploaded_file.getvalue()); raw_df = dp.load_data(file_content_buffer, filename)
                         if raw_df is not None:
                             prepared_df = dp.prepare_data(raw_df)
                             if prepared_df is not None and not prepared_df.empty:
-                                section['file_info'] = {'name': filename, 'unique_key': unique_key}
-                                section['prepared_df'] = prepared_df
-                                section['metadata'] = metadata_parsed or {'filename': filename, 'display_name': filename}
+                                section['file_info'] = {'name': filename, 'unique_key': unique_key}; section['prepared_df'] = prepared_df; section['metadata'] = metadata_parsed or {'filename': filename, 'display_name': filename}
                                 st.success(f"Loaded: {filename}"); st.rerun()
                             else: st.error(f"Data prep failed: {filename}."); section['prepared_df'] = None
                         else: st.error(f"File load failed: {filename}."); section['prepared_df'] = None
                     except Exception as e: st.error(f"Error processing {uploaded_file.name}: {e}"); logger.error(f"File processing error (Sect {section_id}): {e}", exc_info=True); section['prepared_df'] = None; section['file_info'] = {'name': uploaded_file.name, 'unique_key': uploaded_file.name}
 
-            # B. Configuration
             if section.get('prepared_df') is not None:
-                st.markdown("---")
-                df_prepared_sec = section['prepared_df']; config = section['plot_config']; needs_config_rerun = False
+                st.markdown("---"); df_prepared_sec = section['prepared_df']; config = section['plot_config']; needs_config_rerun = False
                 smoothing_options = ["Raw Data", "10 Breaths MA", "15 Breaths MA", "20 Breaths MA", "30 Breaths MA", "5 Sec MA", "10 Sec MA", "15 Sec MA", "20 Sec MA", "30 Sec MA"]
                 current_smooth = config['smooth']; smooth_idx = smoothing_options.index(current_smooth) if current_smooth in smoothing_options else 0
                 new_smooth = st.selectbox(f"Smoothing ({section_id}):", options=smoothing_options, index=smooth_idx, key=f"smooth_{section_id}")
                 if new_smooth != config['smooth']: config['smooth'] = new_smooth; section['plot_fig'] = None; needs_config_rerun = True
 
-                numeric_cols = []
+                numeric_cols = [];
                 try:
                     df_display_for_cols = section.get('df_display')
-                    if df_display_for_cols is None or needs_config_rerun: # If df_display needs update or missing
+                    if df_display_for_cols is None or needs_config_rerun or section.get('plot_fig') is None: # Update df_display if config changed or plot needs regen
                          df_display_for_cols = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
-                         section['df_display'] = df_display_for_cols # Store the potentially updated df_display
-
+                         section['df_display'] = df_display_for_cols
                     if df_display_for_cols is not None and not df_display_for_cols.empty: numeric_cols = df_display_for_cols.select_dtypes(include=np.number).columns.tolist()
                     if not numeric_cols: logger.warning(f"No numeric cols (Sect {section_id})."); numeric_cols = df_prepared_sec.select_dtypes(include=np.number).columns.tolist()
-                except Exception as e_smooth_cols: st.error(f"Smooth error: {e_smooth_cols}"); logger.error(f"Col selection smooth fail (Sect {section_id})", exc_info=True); numeric_cols = df_prepared_sec.select_dtypes(include=np.number).columns.tolist()
-                if not numeric_cols: st.error("No numeric columns available."); continue
+                except Exception as e_smooth_cols: st.error(f"Smooth error: {e_smooth_cols}"); logger.error(f"Col select smooth fail (Sect {section_id})", exc_info=True); numeric_cols = df_prepared_sec.select_dtypes(include=np.number).columns.tolist()
+                if not numeric_cols: st.error("No numeric columns."); continue
 
                 current_x = config.get('x_col'); default_x = current_x if current_x in numeric_cols else (dp.TIME_COL_SECONDS if dp.TIME_COL_SECONDS in numeric_cols else numeric_cols[0])
                 try: x_idx = numeric_cols.index(default_x)
@@ -202,47 +189,46 @@ for section in st.session_state.analysis_sections:
                 if new_y != config['y_col']: config['y_col'] = new_y; section['plot_fig'] = None; needs_config_rerun = True
 
                 if needs_config_rerun:
-                    # Ensure df_display is updated one last time if config changed
-                    if section.get('plot_fig') is None: # If plot needs regen anyway
+                    if section.get('plot_fig') is None: # Update df_display again if plot needs regen anyway
                         try: section['df_display'] = dp.apply_smoothing(df_prepared_sec, config['smooth'], dp.TIME_COL_SECONDS)
-                        except Exception as e_smooth_rerun: st.error(f"Error applying smooth: {e_smooth_rerun}"); section['df_display'] = None
-                    st.rerun() # Rerun to update title / plot
-
-            else: st.caption("Upload a file to configure plot.")
+                        except Exception as e_smooth_rerun: st.error(f"Smooth error: {e_smooth_rerun}"); section['df_display'] = None
+                    st.rerun()
+            else: st.caption("Upload file to configure plot.")
 
         # --- Column 2: Plot ---
         with col2:
             st.subheader("2. Plot")
             df_display_sec = section.get('df_display'); config_sec = section.get('plot_config', {}); x_col_sec = config_sec.get('x_col'); y_col_sec = config_sec.get('y_col'); segments_sec = section.get('segments', []); metadata_sec = section.get('metadata', {})
-
             if df_display_sec is not None and x_col_sec and y_col_sec:
                 if section.get('plot_fig') is None:
                      logger.info(f"Regenerating plot for section {section_id}")
                      section['plot_fig'] = create_plot(df_display_sec, x_col_sec, y_col_sec, config_sec.get('smooth','Raw Data'), metadata_sec, segments_sec, section_id)
-
                 fig_to_display = section.get('plot_fig')
                 if fig_to_display:
                     plot_chart_key = f"chart_{section_id}"
-                    # <<< CHANGE: Use on_click instead of on_select >>>
+                    # <<< Using on_click >>>
                     event_data = st.plotly_chart(fig_to_display, key=plot_chart_key, use_container_width=True, on_click="rerun")
 
-                    # --- Handle Plot CLICK Event FOR THIS SECTION ---
-                    # <<< CHANGE: Adapt to expected click event data structure >>>
+                    # --- Handle Plot CLICK Event ---
+                    # <<< Adapted event handling >>>
                     if event_data and event_data != section.get('last_select_event'):
                         section['last_select_event'] = event_data
-                        points_data = event_data.get('points', [])
-                        if len(points_data) >= 1:
-                            logger.info(f"Plot click event (Sect {section_id}): {points_data[0]}")
-                            clicked_point = points_data[0]
-                            x_sel = clicked_point.get('x'); y_sel = clicked_point.get('y')
+                        logger.info(f"Plot click event (Sect {section_id}): {event_data}")
+                        clicked_point_data = None
+                        if isinstance(event_data, list) and len(event_data) > 0: clicked_point_data = event_data[0]
+                        elif isinstance(event_data, dict):
+                            if 'points' in event_data and isinstance(event_data['points'], list) and len(event_data['points']) > 0: clicked_point_data = event_data['points'][0]
+                            else: clicked_point_data = event_data # Assume dict is the point
+
+                        if isinstance(clicked_point_data, dict):
+                            x_sel = clicked_point_data.get('x'); y_sel = clicked_point_data.get('y')
                             if x_sel is not None and y_sel is not None:
                                 target = section['selection_target']; mi_sec = section['manual_input']
                                 if target == 'P1': mi_sec['x1'] = x_sel; mi_sec['y1'] = y_sel; section['selection_target'] = 'P2'
                                 elif target == 'P2': mi_sec['x2'] = x_sel; mi_sec['y2'] = y_sel; section['selection_target'] = 'P1'
-                                logger.debug(f"Updated Manual {target} from plot click (Sect {section_id})")
-                                st.rerun() # Rerun needed
-                            else: logger.warning(f"Plot click point missing coords (Sect {section_id}).")
-                        else: logger.debug(f"Click event no points? Event: {event_data}")
+                                logger.debug(f"Updated Manual {target} from plot click (Sect {section_id})"); st.rerun()
+                            else: logger.warning(f"Click point missing coords (Sect {section_id}). Data: {clicked_point_data}")
+                        else: logger.warning(f"Could not extract point data dict from click event (Sect {section_id}). Event: {event_data}")
                 else: st.warning("Plot could not be generated.")
             else: st.caption("Configure axes and smoothing after upload.")
 
@@ -250,7 +236,7 @@ for section in st.session_state.analysis_sections:
         with col3:
             st.subheader("3. Segments")
             if section.get('prepared_df') is not None:
-                target_sec = section.get('selection_target', 'P1'); st.info(f"Next plot click updates: **{target_sec}**")
+                target_sec = section.get('selection_target', 'P1'); st.info(f"Next click updates: **{target_sec}**")
                 mi_sec = section.get('manual_input', {});
                 mi_sec['x1'] = st.number_input(f"P1 X ({section_id}):", value=mi_sec.get('x1'), format="%.3f", key=f"num_x1_{section_id}")
                 mi_sec['y1'] = st.number_input(f"P1 Y ({section_id}):", value=mi_sec.get('y1'), format="%.3f", key=f"num_y1_{section_id}")
@@ -267,11 +253,8 @@ for section in st.session_state.analysis_sections:
                         p1 = (x1,y1); p2 = (x2,y2)
                         if abs(p1[0] - p2[0]) > 1e-6 or abs(p1[1] - p2[1]) > 1e-6:
                             try:
-                                slope = dp.calculate_slope(p1, p2)
-                                section['segments'].append({'start': p1, 'end': p2, 'slope': slope})
-                                logger.info(f"Added seg {len(section['segments'])} (Sect {section_id})")
-                                section['manual_input'] = {'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target'] = 'P1'
-                                section['plot_fig'] = None; st.rerun()
+                                slope = dp.calculate_slope(p1, p2); section['segments'].append({'start': p1, 'end': p2, 'slope': slope})
+                                logger.info(f"Added seg {len(section['segments'])} (Sect {section_id})"); section['manual_input'] = {'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target'] = 'P1'; section['plot_fig'] = None; st.rerun()
                             except Exception as e_slope: st.error(f"Slope calc error: {e_slope}"); logger.error(f"Slope error (Sect {section_id})", exc_info=True)
                         else: st.error("P1/P2 too close.")
                 if clear_button_sec: section['manual_input'] = {'x1':None,'y1':None,'x2':None,'y2':None}; section['selection_target']='P1'; st.rerun()
@@ -296,6 +279,7 @@ for section in st.session_state.analysis_sections:
         # --- Section Footer ---
         st.markdown("---")
         st.button(f"❌ Remove Section {section_id}", key=f"remove_{section_id}", on_click=remove_section, args=(section_id,), type="secondary")
+
 
 # --- Footer ---
 st.sidebar.markdown("---")
